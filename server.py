@@ -6,8 +6,8 @@ import numpy as np
 
 class NodeServiceImpl(node_service_pb2_grpc.NodeServiceServicer):
     async def SendMessage(self,request:node_service_pb2.MessageRequest,context):
-        print(f"Received message: {request.message}")
-        reply_text = f"Received data: {request.data}"
+        print(f"Received message: {request.message_text} from {request.sender_id}")
+        reply_text = f"Received data: {request.message_text}"
         return node_service_pb2.MessageReply(confirmation_text=reply_text)
     
     async def HealthCheck(self,request:node_service_pb2.Empty,context):
