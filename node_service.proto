@@ -1,0 +1,37 @@
+syntax = "proto3";
+package node_service;
+
+service NodeService {
+  rpc SendMessage (MessageRequest) returns (MessageReply);
+  rpc HealthCheck (Empty) returns (HealthCheckResponse);
+  rpc SendTensor (TensorRequest) returns (TensorResponse); // Assuming you'll define TensorResponse later
+}
+
+// Corrected message definition
+message MessageRequest {
+  string sender_id = 1;
+  string message_text = 2;
+}
+
+message MessageReply {
+  string confirmation_text = 1;
+}
+
+message Empty {}
+
+message HealthCheckResponse {
+  bool is_healthy = 1;
+}
+
+message TensorRequest {
+  string request_id = 1;
+  bytes tensor_data = 2;
+  repeated int32 shape = 3;
+  string dtype = 4;
+}
+
+// You'll also need to define TensorResponse if you keep that RPC
+message TensorResponse {
+  string status = 1;
+  // Add other fields as needed
+}
