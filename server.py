@@ -1,32 +1,33 @@
-import grpc 
-import asyncio 
+import grpc
+import asyncio
 import node_service_pb2
 import node_service_pb2_grpc
-import numpy as np 
+import numpy as np
 
-W2 = np.random.rand(5,2).astype(np.float32)
+W2 = np.random.rand(5, 2).astype(np.float32)
 b2 = np.random.rand(2).astype(np.float32)
 
 
 class NodeServiceImpl(node_service_pb2_grpc.NodeServiceServicer):
-    async def SendMessage(self,request:node_service_pb2.MessageRequest,context):
+    async def SendMessage(self, request: node_service_pb2.MessageRequest, context):
         print(f"Received message: {request.message_text} from {request.sender_id}")
         reply_text = f"Received data: {request.message_text}"
         return node_service_pb2.MessageReply(confirmation_text=reply_text)
-    
-    async def HealthCheck(self,request:node_service_pb2.Empty,context):
+
+    async def HealthCheck(self, request: node_service_pb2.Empty, context):
         print("health check received")
         return node_service_pb2.HealthCheckResponse(is_healthy=True)
-    
-    async def SendTensor(self, request:node_service_pb2.TensorRequest, context):
+
+    async def SendTensor(self, request: node_service_pb2.TensorRequest, context):
         print(f"Received tensor with request_id: {request.request_id}")
         print(f"Incoming Tensor metadata - shape: {list(request.tensor.shape)}, dtype: {request.tensor.dtype}")
         output_tensor_proto = None
+        status_message = ""
 
         try:
             intermediate_tensor = np.frombuffer(
                 request.tensor.tensor_data,
-                dtype = np.dtype(request.tensor.dtype)
+                dtype=np.dtype(request.tensor.dtype)
             ).reshape(request.tensor.shape)
             print(f"Server received intermediate tensor with shape: {intermediate_tensor.shape}")
 
@@ -37,8 +38,14 @@ class NodeServiceImpl(node_service_pb2_grpc.NodeServiceServicer):
             status_message = "Tensor processed successfully. Returning final output."
         except Exception as e:
             print(e)
-        return node_service_pb2.TensorResponse(status=status_message, tensor=output_tensor_proto)  
-
+            status_message = str(e)
+        
+        output_tensor_proto = node_service_pb2.Tensor(
+            tensor_data = final_output.tobytes(),
+            shape = list(final_output.shape),
+            dtype = str(final_output.dtype)
+        )
+        return node_service_pb2.TensorResponse(status=status_message, result_tensor=output_tensor_proto)
 
 
 async def serve():

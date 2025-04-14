@@ -31,9 +31,7 @@ message Tensor {
 
 message TensorRequest {
   string request_id = 1;
-  bytes tensor_data = 2;
-  repeated int32 shape = 3;
-  string dtype = 4;
+  Tensor tensor = 2;  
 }
 
 

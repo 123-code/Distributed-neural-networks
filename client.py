@@ -34,7 +34,7 @@ async def run():
             
             request = node_service_pb2.TensorRequest(
                 request_id="compute_req_001",
-                tensor=tensor_message  # Assign the Tensor message
+                tensor=tensor_message  
             )
             try:
                 response = await stub.SendTensor(request)
