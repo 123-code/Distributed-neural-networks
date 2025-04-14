@@ -23,13 +23,18 @@ async def run():
             linear1_output = input_data @ W1 + b1
             intermediate_output = relu(linear1_output)
             print(f"Intermediate output shape: {intermediate_output.shape}")
+            
+            tensor_message = node_service_pb2.Tensor(
+                tensor_data=intermediate_output.tobytes(),
+                shape=list(intermediate_output.shape),
+                dtype=str(intermediate_output.dtype)
+            )
+
+            
+            
             request = node_service_pb2.TensorRequest(
-                request_id = "compute_req_001",
-                tensor = node_service_pb2.Tensor(
-                    tensor_data = intermediate_output.tobytes(),
-                    shape = list(intermediate_output.shape),
-                    dtype= str(intermediate_output.dtype)
-                )
+                request_id="compute_req_001",
+                tensor=tensor_message  # Assign the Tensor message
             )
             try:
                 response = await stub.SendTensor(request)
