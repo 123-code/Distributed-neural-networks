@@ -1,0 +1,10 @@
+{
+    "nodes":[
+        {"id": "node1", "address": "192.168.1.101:50051", "part_index": 0},
+        {"id": "node2", "address": "192.168.1.83:50051", "part_index": 1},
+        {"id": "node3", "address": "192.168.1.120:50051", "part_index": 2}
+    ],
+    "model_weights":"./cifar10_model.pth",
+    "num_parts":3,
+    "return_to_node_id":"node1"
+} 
