@@ -7,8 +7,8 @@ import node_service_pb2
 import node_service_pb2_grpc
 import numpy as np
 import torch
-# Make sure this import works relative to where you run node.py
-from cifar_model_parts import NeuralNetwork, ModelPart0, ModelPart1, ModelPart2
+# --- IMPORT YOUR **NEW** MODEL PARTS ---
+from cifar_model_parts import NeuralNetwork, ModelPart0_2Node, ModelPart1_2Node # Use the 2-node parts
 import torchvision.transforms as transforms
 from PIL import Image
 import traceback
@@ -19,17 +19,18 @@ MY_ADDRESS = None
 MY_PORT = None
 MY_PART_INDEX = -1
 NEXT_NODE_ADDRESS = None
-FIRST_NODE_ADDRESS = None # Address for final result callback (optional)
+FIRST_NODE_ADDRESS = None
 IS_LAST_NODE = False
 MODEL_WEIGHTS_PATH = None
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 my_model_part = None
 
+# --- UPDATE: Map part index to the *new* 2-node model classes ---
 MODEL_PARTS_CLASSES = {
-    0: ModelPart0,
-    1: ModelPart1,
-    2: ModelPart2
+    0: ModelPart0_2Node,
+    1: ModelPart1_2Node,
 }
+# --- END UPDATE ---
 
 # --- gRPC Server Implementation ---
 class NodeServiceImpl(node_service_pb2_grpc.NodeServiceServicer):
@@ -39,18 +40,14 @@ class NodeServiceImpl(node_service_pb2_grpc.NodeServiceServicer):
         print(f"\n[{NODE_ID}] Received tensor request_id: {request.request_id}")
         print(f"[{NODE_ID}] Incoming Tensor - shape: {list(request.tensor.shape)}, dtype: {request.tensor.dtype}")
 
-        # --- Initialize response variables ---
-        # Tensor to potentially send *back* to the *previous* node in the chain
         tensor_to_return_proto = None
         status_message = f"[{NODE_ID}] Error processing tensor."
-        # ------------------------------------
-
         try:
             # 1. Deserialize input tensor
             input_np = np.frombuffer(
                 request.tensor.tensor_data, dtype=np.dtype(request.tensor.dtype)
             ).reshape(request.tensor.shape)
-            input_torch = torch.from_numpy(input_np.copy()).to(DEVICE) # Use .copy() to potentially avoid write warning
+            input_torch = torch.from_numpy(input_np.copy()).to(DEVICE)
             print(f"[{NODE_ID}] Deserialized input tensor shape: {input_torch.shape}")
 
             # 2. Run through this node's model part
@@ -61,22 +58,19 @@ class NodeServiceImpl(node_service_pb2_grpc.NodeServiceServicer):
 
             # 3. Decide where to send the output
             if IS_LAST_NODE:
-                # --- This is the LAST node ---
+                # --- This is the LAST node (Node 2 in this 2-node setup) ---
                 print(f"[{NODE_ID}] Reached final node.")
                 predicted_class_index = np.argmax(output_np)
                 print(f"[{NODE_ID}] Final Prediction Index: {predicted_class_index}")
                 status_message = f"[{NODE_ID}] Processing complete. Prediction: {predicted_class_index}"
-
-                # Prepare the *final* tensor to send BACK to the PREVIOUS node (who called this one)
                 tensor_to_return_proto = node_service_pb2.Tensor(
                     tensor_data=output_np.tobytes(),
                     shape=list(output_np.shape),
                     dtype=str(output_np.dtype)
                 )
-                # NOTE: No further forwarding needed from the last node.
 
             else:
-                # --- This is an INTERMEDIATE node ---
+                # --- This is an INTERMEDIATE node (Node 1 in this 2-node setup) ---
                 print(f"[{NODE_ID}] Forwarding tensor to next node: {NEXT_NODE_ADDRESS}")
                 async with grpc.aio.insecure_channel(NEXT_NODE_ADDRESS) as channel:
                     stub = node_service_pb2_grpc.NodeServiceStub(channel)
@@ -89,35 +83,27 @@ class NodeServiceImpl(node_service_pb2_grpc.NodeServiceServicer):
                         )
                     )
                     try:
-                        # Get the response from the NEXT node
                         next_response = await stub.SendTensor(next_request)
                         print(f"[{NODE_ID}] Response from next node ({NEXT_NODE_ADDRESS}): {next_response.status}")
                         status_message = f"[{NODE_ID}] Forwarded. Next node status: {next_response.status}"
-
-                        # *** FIX: Only propagate the final tensor back if it exists in the response ***
-                        # This handles the case where the *next* node was the *last* one
-                        if next_response.HasField("output_tensor"):
-                            tensor_to_return_proto = next_response.output_tensor # Propagate the FINAL result back
-                        # *** END FIX ***
+                        # Propagate the final tensor if received from the next (last) node
+                        if next_response.HasField("result_tensor"):
+                            tensor_to_return_proto = next_response.result_tensor
 
                     except grpc.aio.AioRpcError as e:
                          print(f"!!! [{NODE_ID}] Error calling SendTensor on next node ({NEXT_NODE_ADDRESS}): {e.code()} - {e.details()}")
                          status_message = f"[{NODE_ID}] Error forwarding: {e.details()}"
-                         # Don't propagate tensor on error
                          tensor_to_return_proto = None
-
 
         except Exception as e:
             print(f"!!! [{NODE_ID}] Error processing tensor: {e}")
             traceback.print_exc()
             status_message = f"[{NODE_ID}] Error: {e}"
-            tensor_to_return_proto = None # Ensure no tensor is returned on error
+            tensor_to_return_proto = None
 
-        # Return status AND the relevant tensor (either final result from self/next, or None)
-        # back to the node that CALLED this one.
         return node_service_pb2.TensorResponse(
             status=status_message,
-            output_tensor=tensor_to_return_proto # Send back the final tensor if available
+            result_tensor=tensor_to_return_proto
         )
 
     async def HealthCheck(self, request, context):
@@ -127,7 +113,6 @@ class NodeServiceImpl(node_service_pb2_grpc.NodeServiceServicer):
     async def SendMessage(self, request, context):
         print(f"[{NODE_ID}] Received message from {request.sender_id}")
         return node_service_pb2.MessageReply(confirmation_text=f"[{NODE_ID}] got msg '{request.message_text}'")
-
 
 # --- Server Startup ---
 async def serve():
@@ -173,14 +158,14 @@ async def initiate_inference(input_image_path: str):
         input_image_torch = torch.randn(1, 3, 32, 32).to(DEVICE)
 
 
-    # 2. Run through first model part
-    print(f"[{NODE_ID}] Running model part 0...")
+    # 2. Run through first model part (Part 0 for 2 nodes)
+    print(f"[{NODE_ID}] Running model part {MY_PART_INDEX}...")
     with torch.no_grad():
         intermediate_output_torch = my_model_part(input_image_torch)
     intermediate_output_np = intermediate_output_torch.cpu().numpy()
     print(f"[{NODE_ID}] Computed intermediate output shape: {intermediate_output_np.shape}")
 
-    # 3. Send to the next node
+    # 3. Send to the next node (which is the last node in this case)
     print(f"[{NODE_ID}] Sending intermediate tensor to {NEXT_NODE_ADDRESS}...")
     if not NEXT_NODE_ADDRESS:
         print(f"[{NODE_ID}] ERROR: Cannot initiate inference, NEXT_NODE_ADDRESS is not set.")
@@ -189,7 +174,7 @@ async def initiate_inference(input_image_path: str):
     async with grpc.aio.insecure_channel(NEXT_NODE_ADDRESS) as channel:
         stub = node_service_pb2_grpc.NodeServiceStub(channel)
         request = node_service_pb2.TensorRequest(
-            request_id="cifar_pipe_001", # Generate unique IDs in real use
+            request_id="cifar_pipe_2node_001",
             tensor=node_service_pb2.Tensor(
                 tensor_data=intermediate_output_np.tobytes(),
                 shape=list(intermediate_output_np.shape),
@@ -197,25 +182,22 @@ async def initiate_inference(input_image_path: str):
             )
         )
         try:
-            # This call now waits for the *entire* pipeline to finish
-            # and potentially gets the final result back.
             response = await stub.SendTensor(request)
             print(f"[{NODE_ID}] Received final status from pipeline: {response.status}")
 
-            # Process final result if it was propagated back by the chain
-            if response.HasField("output_tensor"):
-                final_tensor_proto = response.output_tensor
+            # Process final result (Node 1 receives it back from Node 2)
+            if response.HasField("result_tensor"):
+                final_tensor_proto = response.result_tensor
                 final_result_np = np.frombuffer(
                     final_tensor_proto.tensor_data,
                     dtype=np.dtype(final_tensor_proto.dtype)
                 ).reshape(final_tensor_proto.shape)
                 predicted_class_index = np.argmax(final_result_np)
-                # You might need CIFAR class names list here
+                # Define CIFAR classes if needed for interpretation
+                # classes = ('plane', 'car', ...)
                 print(f"[{NODE_ID}] ***** FINAL PREDICTION (Index): {predicted_class_index} *****")
             else:
-                # This might happen if the last node didn't return the tensor
-                # or an intermediate node failed to propagate it.
-                print(f"[{NODE_ID}] Final result was processed but not received back by initiating node.")
+                print(f"[{NODE_ID}] Final result status received, but tensor not included in response.")
 
         except grpc.aio.AioRpcError as e:
             print(f"!!! [{NODE_ID}] SendTensor RPC failed during initiation: {e.code()} - {e.details()}")
@@ -228,7 +210,7 @@ async def start_inference_after_delay(delay, image_path):
     print(f"[{NODE_ID}] Waiting {delay}s before initiating inference...")
     await asyncio.sleep(delay)
     print(f"[{NODE_ID}] Delay finished. Initiating inference now.")
-    await initiate_inference(image_path) # Make sure to await the async function
+    await initiate_inference(image_path)
 
 # --- Main Execution ---
 if __name__ == '__main__':
@@ -266,6 +248,12 @@ if __name__ == '__main__':
     num_parts = config.get('num_parts')
     return_node_id = config.get('return_to_node_id')
 
+    # --- VALIDATE num_parts from config ---
+    if num_parts != 2:
+         print(f"ERROR: Configuration file specifies num_parts={num_parts}, but this script expects 2 parts.")
+         exit(1)
+    # --- END VALIDATION ---
+
     # Basic validation
     if None in [MY_ADDRESS, MY_PART_INDEX, MODEL_WEIGHTS_PATH, num_parts]:
         print("ERROR: Config file is missing required fields (address, part_index, model_weights, num_parts)")
@@ -277,9 +265,9 @@ if __name__ == '__main__':
         print(f"ERROR: Invalid format for MY_ADDRESS '{MY_ADDRESS}'. Expected IP:Port.")
         exit(1)
 
-    IS_LAST_NODE = (MY_PART_INDEX == num_parts - 1)
+    IS_LAST_NODE = (MY_PART_INDEX == num_parts - 1) # Will be True for Node 2 (index 1)
 
-    if not IS_LAST_NODE:
+    if not IS_LAST_NODE: # Only Node 1 (index 0) needs the next node address
         next_part_index = MY_PART_INDEX + 1
         next_node_config = next((n for n in config['nodes'] if n.get('part_index') == next_part_index), None)
         if not next_node_config:
@@ -289,9 +277,9 @@ if __name__ == '__main__':
         if not NEXT_NODE_ADDRESS:
              print(f"ERROR: Next node (index {next_part_index}) is missing address in config")
              exit(1)
-    else: # If this IS the last node
-        NEXT_NODE_ADDRESS = None # No next node to forward to
-        if return_node_id: # Check if we need to know the originator's address
+    else:
+        NEXT_NODE_ADDRESS = None # Last node doesn't forward
+        if return_node_id:
             return_node_config = next((n for n in config['nodes'] if n.get('id') == return_node_id), None)
             if return_node_config:
                 FIRST_NODE_ADDRESS = return_node_config.get('address')
@@ -316,18 +304,26 @@ if __name__ == '__main__':
         full_state_dict = torch.load(MODEL_WEIGHTS_PATH, map_location=torch.device("cpu"))
         print(f"[{NODE_ID}] Loading model part {MY_PART_INDEX}...")
         temp_full_model = NeuralNetwork()
+        # --- Use the correct mapping for 2 nodes ---
         MyModelPartClass = MODEL_PARTS_CLASSES.get(MY_PART_INDEX)
+        # --- End Use the correct mapping ---
         if not MyModelPartClass:
             print(f"ERROR: No model part class defined for index {MY_PART_INDEX}")
             exit(1)
         my_model_part = MyModelPartClass(temp_full_model).to(DEVICE)
         missing_keys, unexpected_keys = my_model_part.load_state_dict(full_state_dict, strict=False)
+        # Adjust expected warnings based on the split
+        if MY_PART_INDEX == 0:
+             print(f"[{NODE_ID}] Expect warnings for fc1, fc2 weights (loaded by Node 1)")
+        elif MY_PART_INDEX == 1:
+             print(f"[{NODE_ID}] Expect warnings for conv1, conv2 weights (loaded by Node 0)")
+
         if missing_keys:
             print(f"[{NODE_ID}] WARNING: Missing keys loading state dict: {missing_keys}")
         if unexpected_keys:
             print(f"[{NODE_ID}] WARNING: Unexpected keys loading state dict: {unexpected_keys}")
         my_model_part.eval()
-        print(f"[{NODE_ID}] Successfully loaded weights into ModelPart{MY_PART_INDEX}.")
+        print(f"[{NODE_ID}] Successfully loaded weights into ModelPart{MY_PART_INDEX}_2Node.") # Log which part loaded
     except FileNotFoundError:
         print(f"[{NODE_ID}] ERROR: Weights file not found at '{MODEL_WEIGHTS_PATH}'")
         exit(1)
@@ -353,7 +349,6 @@ if __name__ == '__main__':
 
     try:
         print(f"[{NODE_ID}] Running event loop...")
-        # Run both tasks concurrently
         loop.run_until_complete(asyncio.gather(server_task, init_task))
     except KeyboardInterrupt:
         print(f"\n[{NODE_ID}] KeyboardInterrupt received, shutting down...")
@@ -362,27 +357,16 @@ if __name__ == '__main__':
         traceback.print_exc()
     finally:
         print(f"[{NODE_ID}] Cleaning up...")
-        # Cancel tasks gracefully
         if server_task and not server_task.done():
             server_task.cancel()
         if init_task and not init_task.done():
             init_task.cancel()
-
-        # Allow tasks to finish cancellation
         async def gather_cancelled():
-           # Use return_exceptions=True to prevent gather from raising CancelledError itself
            await asyncio.gather(server_task, init_task, return_exceptions=True)
-
         try:
-            # Run the gather operation within the existing loop if it's still running
             if loop.is_running():
                 loop.run_until_complete(gather_cancelled())
-            else:
-                # If the main loop stopped unexpectedly, we might need a temporary loop
-                asyncio.run(gather_cancelled())
-        except RuntimeError as e:
-             print(f"[{NODE_ID}] Error during cleanup gather: {e}") # Handle loop already closed error
-
-        if not loop.is_closed():
-             loop.close()
-        print(f"[{NODE_ID}] Event loop closed. Exiting.")
+        except RuntimeError: pass
+        finally:
+            if not loop.is_closed(): loop.close()
+            print(f"[{NODE_ID}] Event loop closed. Exiting.")
