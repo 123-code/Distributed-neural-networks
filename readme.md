@@ -1,4 +1,4 @@
-# Distributed Neural Network Inference Framework
+# mini distributed Neural Network Inference Framework
 
 This framework enables you to run neural network inference across multiple devices, distributing the computational load and potentially improving performance. It leverages gRPC for inter-node communication and allows you to split a neural network model into parts, assigning each part to a different node in the network.
 
