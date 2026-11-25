@@ -1,0 +1,4 @@
+-r requirements-coordinator.txt
+# optional: compare against Hugging Face in tests/test_reference.py
+torch
+transformers
